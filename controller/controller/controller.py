@@ -3,7 +3,7 @@ from rclpy.node import Node
 import serial
 import time
 
-from custom_interfaces.msg import Pose                     # CHANGE
+from custom_interfaces.msg import Pose   # CHANGE
 
 
 class Controller(Node):
@@ -11,19 +11,21 @@ class Controller(Node):
     def __init__(self):
         super().__init__('controller')
         self.subscription = self.create_subscription(
-            Pose,                                               # CHANGE
+            Pose,                # CHANGE
             'orient_ctrl',
             self.listener_callback,
             10)
         self.subscription
 
-
+        # --- Serial Configuration ---
         self.SERIAL_PORT = '/dev/ttyACM0' 
         self.BAUD_RATE = 9600 
 
-        # --- New: Motor calculation is now done in Python ---
+        # --- Steps per degree ---
         self.STEPS_PER_DEGREE_X = 8.89
         self.STEPS_PER_DEGREE_Y = 8.89
+
+        # --- Open Serial ---
         self.ser = None 
         try:
             self.ser = serial.Serial(self.SERIAL_PORT, self.BAUD_RATE, timeout=1)
@@ -35,20 +37,17 @@ class Controller(Node):
                 self.get_logger().info(f"Arduino says: {startup_message}")
 
         except serial.SerialException as e:
-            self.get_logger().info(f"Error opening serial port {self.SERIAL_PORT}: {e}")
+            self.get_logger().error(f"Error opening serial port {self.SERIAL_PORT}: {e}")
 
-    def send_steps(self,x_angle, y_angle):
-        """Calculates steps from angles and sends them to the Arduino."""
-        # Calculate the target steps here
-        target_steps_x = int(x_angle * self.STEPS_PER_DEGREE_X)
-        target_steps_y = int(y_angle * self.STEPS_PER_DEGREE_Y)
+    def send_steps(self, x_angle, y_angle):
+        """Convert relative angles to relative steps and send to Arduino."""
+        delta_steps_x = int(x_angle * self.STEPS_PER_DEGREE_X)
+        delta_steps_y = int(y_angle * self.STEPS_PER_DEGREE_Y)
 
-        # Format the command with step values instead of angles
-        command = f"{target_steps_x} {target_steps_y}\n"
-        
+        command = f"{delta_steps_x} {delta_steps_y}\n"
         self.ser.write(command.encode('utf-8'))
-        self.get_logger().info(f"Sent steps: yaw_angle={target_steps_x}, pitch_angle={target_steps_y}")
-        
+        self.get_logger().info(f"Sent relative steps: X={delta_steps_x}, Y={delta_steps_y}")
+
         response = self.ser.readline().decode('utf-8').strip()
         if response:
             self.get_logger().info(f"Response: {response}")
@@ -58,24 +57,26 @@ class Controller(Node):
             yaw_angle = msg.yaw_theta
             pitch_angle = msg.pitch_theta
             
-            # This function now handles the calculation and sending
+            # Send relative steps (like updated standalone code)
             self.send_steps(yaw_angle, pitch_angle)
 
         except ValueError:
-            self.get_logger().info("Invalid input. Please enter numeric values for angles.")
+            self.get_logger().warn("Invalid input. Please enter numeric values for angles.")
         except Exception as e:
-            self.get_logger().info(f"An error occurred: {e}")
+            self.get_logger().error(f"An error occurred: {e}")
 
-        
+    def destroy_node(self):
+        # Close serial when shutting down
+        if self.ser and self.ser.is_open:
+            self.ser.close()
+            self.get_logger().info("Serial connection closed.")
+        super().destroy_node()
 
 
 def main(args=None):
     rclpy.init(args=args)
-
     controller = Controller()
-
     rclpy.spin(controller)
-
     controller.destroy_node()
     rclpy.shutdown()
 
